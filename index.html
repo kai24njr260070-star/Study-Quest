@@ -246,8 +246,11 @@
   .qpanel{
     position:absolute;left:10px;right:10px;bottom:10px;z-index:6;
     padding:11px 14px 13px;
+    background:linear-gradient(180deg,#0b1b2e,#060f1b);
     animation:panelIn .22s cubic-bezier(.2,1.3,.4,1);
   }
+  /* 問題中は下段のUIを隠してパネルを見やすくする */
+  #battle.q-open .bottom{opacity:0 !important;pointer-events:none !important}
   @keyframes panelIn{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
   .q-head{display:flex;align-items:center;gap:8px;margin-bottom:9px;font-size:11px}
   .badge{padding:2px 8px;border:1px solid #4b6d95;border-radius:3px;color:#cfe3ff;font-weight:700}
@@ -319,6 +322,29 @@
   }
   @media (prefers-reduced-motion:reduce){
     .logo,.logo .ch,.sub,.tbtns,.title-foot,#start::after,.tbtn.play::after{animation:none !important;opacity:1;transform:none}
+  }
+  /* デバッグモード */
+  body.debug::after{
+    content:'DEBUG  Lv99 / HP・MP 無敵 / 正解表示';
+    position:fixed; left:50%; top:6px; transform:translateX(-50%); z-index:9999;
+    font:700 10px/1 ui-monospace, monospace; letter-spacing:.06em;
+    color:#0b1c38; background:#4ade80; padding:6px 11px; border-radius:999px;
+    box-shadow:0 0 18px rgba(74,222,128,.55); pointer-events:none;
+  }
+  .cmd-btn.boom-btn{
+    border-color:#ff6a2a !important;
+    box-shadow:0 0 14px rgba(255,106,42,.35), inset 0 0 0 1px rgba(255,106,42,.2);
+  }
+  .cmd-btn.boom-btn span:nth-child(2){font-size:11px;letter-spacing:-.02em}
+  .choice.dbg-correct{
+    border-color:#4ade80 !important;
+    background:linear-gradient(90deg, rgba(74,222,128,.26), rgba(74,222,128,.05)) !important;
+    box-shadow:0 0 0 2px rgba(74,222,128,.5), 0 0 18px rgba(74,222,128,.45);
+  }
+  .choice.dbg-correct::after{
+    content:'正解'; margin-left:auto; flex:0 0 auto;
+    font:800 10px/1 ui-monospace, monospace; color:#08301a;
+    background:#4ade80; border-radius:999px; padding:4px 8px;
   }
 </style>
 </head>
@@ -616,6 +642,13 @@ ELEMENTS.forEach(function(attr){
   });
 });
 
+/* 爆裂魔法（MPをすべて使い果たす） */
+const EXPLOSION = {
+  id: '爆裂', name: 'エクスプロージョン', attr: '炎', subject: '国語',
+  rank: 22, mp: 0, power: 9, lv: 1, diff: 5, explosion: true
+};
+SPELLS.push(EXPLOSION);
+
 function mpMax(){ return 12 + Math.floor(S.level * 1.5); }
 
 /* ---------- スプライト ---------- */
@@ -710,6 +743,7 @@ const ctx = cv.getContext('2d');
 let W = 1, H = 1, DPR = 1;
 let safeBottom = 240;   // 下部ウィンドウ群の高さ（敵の描画位置の基準）
 let bgCache = null;     // 戦闘背景のキャッシュ（サイズ変更で作り直す）
+let DEBUG = false;      // デバッグモード（S→Q→S→Q）
 
 function resize(){
   DPR = Math.min(2, window.devicePixelRatio || 1);
@@ -833,7 +867,7 @@ const fx = {
   numbers: [], parts: [], sparks: [], shake: 0, flash: 0,
   entrance: 0, enemyX: 0, enemyY: 0, enemyPx: 15, dissolve: 0,
   castColor: '#ffffff', castLife: 0, casts: [],
-  hitPunch: 0, slow: 0
+  hitPunch: 0, slow: 0, boom: null
 };
 
 /* 属性ごとの火花パーティクル（軌跡つき） */
@@ -925,6 +959,10 @@ function loop(now){
   if (fx.entrance < 1) fx.entrance = Math.min(1, fx.entrance + dt * 3.2);
   if (fx.dissolve > 0) fx.dissolve = Math.max(0, fx.dissolve - dt * 1.6);
   if (fx.castLife > 0) fx.castLife = Math.max(0, fx.castLife - dt);
+  if (fx.boom){
+    fx.boom.t += dt;
+    if (fx.boom.t > fx.boom.dur) fx.boom = null;
+  }
   for (const c of fx.casts) c.life -= fdt;
   fx.casts = fx.casts.filter(c => c.life > 0);
 
@@ -1239,6 +1277,7 @@ function renderBattle(t){
   }
 
   renderCasts();
+  if (fx.boom) renderExplosion();
 
   ctx.textAlign = 'center';
   for (const n of fx.numbers){
@@ -1542,6 +1581,119 @@ function drawBattleAmbience(t, hy){
     ctx.globalAlpha = 0.16 * Math.sin(ph * Math.PI);
     ctx.drawImage(gs3, mx - 4, my - 4, 8 * (0.6 + ph), 8 * (0.6 + ph));
   }
+  ctx.restore();
+}
+
+/* ---------- 爆裂魔法（エクスプロージョン） ---------- */
+function spawnExplosion(){
+  const x = fx.enemyX, y = fx.enemyY;
+  fx.boom = { t: 0, dur: 3.4, x: x, y: y };
+  fx.shake = 1.0;
+  fx.hitPunch = 1;
+  fx.slow = 0.5;
+  attrTint('#ff7a45', 21);
+  burst(x, y - 24, '#ffb35c', 44);
+  burst(x, y - 8, '#8a6a42', 30);
+  spawnSparks('炎', '#ff7a45', 3, 2.4);
+  spawnSparks('大地', '#8a6a42', 3, 2.0);
+  spawnSparks('光', '#fff0b8', 2, 1.6);
+}
+
+function renderExplosion(){
+  const b = fx.boom;
+  if (!b) return;
+  const t = b.t;
+  const x = b.x, y = b.y, cy = y - 46;
+
+  // 地面の焦げ跡
+  const sc = Math.min(1, t / 0.5);
+  const scFade = Math.max(0, 1 - Math.max(0, t - 1.4) / 1.6);
+  if (scFade > 0){
+    ctx.save();
+    ctx.globalAlpha = 0.55 * sc * scFade;
+    ctx.translate(x, y + 6);
+    ctx.scale(1, 0.3);
+    const sg = ctx.createRadialGradient(0, 0, 0, 0, 0, 190);
+    sg.addColorStop(0, 'rgba(18,7,3,0.95)');
+    sg.addColorStop(0.7, 'rgba(40,16,8,0.55)');
+    sg.addColorStop(1, 'rgba(40,16,8,0)');
+    ctx.fillStyle = sg;
+    ctx.beginPath(); ctx.arc(0, 0, 190, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+
+  // 中心の閃光
+  if (t < 0.6){
+    const f = Math.max(0, 1 - t / 0.6);
+    const gs = glowSprite('#ffffff', 64);
+    const s = (140 + 620 * Math.min(1, t / 0.3)) * Math.min(1, 0.4 + t);
+    ctx.globalAlpha = f;
+    ctx.drawImage(gs, x - s / 2, cy - s / 2, s, s);
+  }
+
+  // 火球
+  const grow = Math.min(1, t / 0.75);
+  const R = 34 + 560 * Math.pow(grow, 0.42);
+  const alpha = Math.max(0, 1 - Math.max(0, t - 0.3) / 1.1);
+  if (alpha > 0){
+    ctx.globalAlpha = 1;
+    const fb = ctx.createRadialGradient(x, cy, 0, x, cy, R);
+    fb.addColorStop(0, 'rgba(255,255,240,' + (0.95 * alpha).toFixed(3) + ')');
+    fb.addColorStop(0.22, 'rgba(255,236,150,' + (0.9 * alpha).toFixed(3) + ')');
+    fb.addColorStop(0.5, 'rgba(255,140,46,' + (0.7 * alpha).toFixed(3) + ')');
+    fb.addColorStop(0.8, 'rgba(190,44,10,' + (0.35 * alpha).toFixed(3) + ')');
+    fb.addColorStop(1, 'rgba(90,12,0,0)');
+    ctx.fillStyle = fb;
+    ctx.beginPath(); ctx.arc(x, cy, R, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // 衝撃波
+  for (let i = 0; i < 3; i++){
+    const q = Math.max(0, Math.min(1, (t - i * 0.07) / 0.85));
+    if (q <= 0) continue;
+    ctx.globalAlpha = (1 - q) * 0.9;
+    ctx.strokeStyle = i === 0 ? '#fff8dc' : '#ff9a3c';
+    ctx.lineWidth = Math.max(1, 9 * (1 - q));
+    ctx.beginPath();
+    ctx.arc(x, cy, 30 + q * Math.max(W, H) * 0.9, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  // キノコ雲
+  const cloud = Math.min(1, Math.max(0, (t - 0.12) / 1.2));
+  if (cloud > 0){
+    const topY = cy - 130 - cloud * 250;
+    const fade = Math.max(0, 1 - Math.max(0, (t - 1.6) / 1.6));
+    const sg2 = ctx.createLinearGradient(x, y, x, topY);
+    sg2.addColorStop(0, 'rgba(255,150,70,' + (0.4 * fade).toFixed(3) + ')');
+    sg2.addColorStop(1, 'rgba(150,70,40,' + (0.28 * fade).toFixed(3) + ')');
+    ctx.fillStyle = sg2;
+    ctx.beginPath();
+    ctx.moveTo(x - 30, y);
+    ctx.lineTo(x + 30, y);
+    ctx.lineTo(x + 16, topY);
+    ctx.lineTo(x - 16, topY);
+    ctx.closePath();
+    ctx.fill();
+
+    for (let i = 0; i < 4; i++){
+      const r = (70 + 110 * cloud) * (1 - i * 0.16);
+      ctx.globalAlpha = Math.max(0, (0.55 - i * 0.1) * fade);
+      const cg = ctx.createRadialGradient(x, topY, 0, x, topY, r);
+      cg.addColorStop(0, 'rgba(255,225,170,0.9)');
+      cg.addColorStop(0.6, 'rgba(225,120,55,0.55)');
+      cg.addColorStop(1, 'rgba(90,30,15,0)');
+      ctx.fillStyle = cg;
+      ctx.beginPath();
+      ctx.ellipse(x, topY - i * 14, r, r * 0.6, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
   ctx.restore();
 }
 
@@ -2178,7 +2330,7 @@ function openSpellMenu(){
   cursorId = null;
   dom.cmd.innerHTML = '';
   ELEMENTS.forEach(function(attr){
-    const learned = SPELLS.filter(s => s.attr === attr && S.level >= s.lv).length;
+    const learned = SPELLS.filter(s => s.attr === attr && !s.explosion && S.level >= s.lv).length;
     const total = SPELL_NAMES[attr].length;
     const b = document.createElement('button');
     b.className = 'cmd-btn';
@@ -2207,9 +2359,11 @@ function openSpellList(attr){
     b.className = 'cmd-btn';
     b.dataset.id = sp.id;
     b.disabled = locked;
+    const isBoom = !!sp.explosion;
     b.innerHTML = '<span class="cur">▶</span>' +
-      '<span style="color:' + (locked ? '#6b7a8d' : (ATTR_COLOR[attr] || '#fff')) + '">' + sp.name + '</span>' +
-      '<span class="sub">' + (locked ? 'Lv' + sp.lv : sp.mp + 'MP ★' + sp.diff) + '</span>';
+      '<span style="color:' + (locked ? '#6b7a8d' : (isBoom ? '#ff6a2a' : (ATTR_COLOR[attr] || '#fff'))) + '">' + sp.name + '</span>' +
+      '<span class="sub">' + (locked ? 'Lv' + sp.lv : (isBoom ? '全MP ★6' : sp.mp + 'MP ★' + sp.diff)) + '</span>';
+    if (isBoom) b.classList.add('boom-btn');
     b.addEventListener('click', function(){ chooseSpell(sp.id); });
     b.addEventListener('mouseenter', function(){ cursorId = sp.id; paintCursor(); });
     dom.cmd.appendChild(b);
@@ -2303,19 +2457,23 @@ function askQuestion(diffs, subject){
     options.forEach((opt, i) => {
       const b = document.createElement('button');
       b.className = 'choice';
+      b.dataset.correct = opt === q.a ? '1' : '0';
       b.innerHTML = '<span class="num">' + (i + 1) + '</span><span>' + opt + '</span>';
       b.addEventListener('click', () => choose(i));
       dom.qChoices.appendChild(b);
     });
+    paintDebugAnswer();
     dom.qFeedback.classList.add('off');
     dom.qChoices.style.display = '';
     dom.qpanel.classList.remove('off');
+    document.getElementById('battle').classList.add('q-open');
 
     function finish(ok){
       if (done) return;
       done = true;
       clearInterval(timerId);
       dom.qpanel.classList.add('off');
+      document.getElementById('battle').classList.remove('q-open');
       resolve({ ok: ok, q: q });
     }
     function wrong(){
@@ -2404,6 +2562,7 @@ async function startBattle(isBoss){
   fx.parts = [];
   fx.casts = [];
   fx.sparks = [];
+  fx.boom = null;
   fx.hitPunch = 0;
   fx.slow = 0;
   updateHUD();
@@ -2455,7 +2614,7 @@ async function doMagic(sp){
   if (!S.canCommand || !S.enemy || S.phase !== 'command') return;
   spellState = null;
 
-  if (S.mp < sp.mp){
+  if (sp.explosion ? S.mp < 6 : S.mp < sp.mp){
     setCommands(false);
     await say('MPが たりない！', 900);
     S.phase = 'command';
@@ -2470,8 +2629,37 @@ async function doMagic(sp){
   // 強い呪文ほど難しい問題になる（呪文ごとの要求★を使う）
   const res = await askQuestion([sp.diff], sp.subject);
   S.answers++;
-  S.mp -= sp.mp;
+  if (!DEBUG && !sp.explosion) S.mp -= sp.mp;
   updateHUD();
+
+  if (res.ok && sp.explosion){
+    S.correct++;
+    S.combo++;
+    S.bestCombo = Math.max(S.bestCombo, S.combo);
+
+    // 詠唱
+    await say('「──我が名は 爆裂魔法の使い手」', 950);
+    await say('エクスプロージョン！！', 650);
+
+    spawnExplosion();
+    whiteFlash();
+    await wait(1000);
+
+    const calc = calcMagic(sp, S.enemy);
+    const dmg = Math.min(calc.dmg, S.enemy.hp);
+    S.enemy.hp -= dmg;
+    popNumber(String(dmg), '#ffd166');
+    if (!DEBUG) S.mp = 0;
+    updateHUD();
+
+    await say('エクスプロージョン！  ' + S.enemy.name + 'に ' + dmg + 'の ダメージ！', 1200);
+    await say('MPを すべて つかいきって たおれこんだ…！', 1000);
+
+    updateHUD();
+    if (S.enemy.hp <= 0){ await victory(); return; }
+    await enemyTurn();
+    return;
+  }
 
   if (res.ok){
     S.correct++;
@@ -2547,7 +2735,7 @@ async function enemyTurn(){
     dmg = Math.max(1, Math.round(dmg * 0.4));
     S.defending = false;
   }
-  S.hp -= dmg;
+  if (!DEBUG) S.hp -= dmg;
   updateHUD();
   redFlash();
   fx.shake = 0.22;
@@ -2762,6 +2950,53 @@ window.addEventListener('keydown', function(e){
   }
 });
 
+/* ---------- デバッグモード（S→Q→S→Q） ---------- */
+let dbgBuf = '';
+
+function paintDebugAnswer(){
+  const list = dom.qChoices ? dom.qChoices.querySelectorAll('.choice') : [];
+  for (const b of list) b.classList.toggle('dbg-correct', DEBUG && b.dataset.correct === '1');
+}
+
+let dbgSaved = null;   // デバッグ前の状態（OFFで戻す）
+
+function setDebug(on){
+  const next = !!on;
+  if (next === DEBUG) return DEBUG;
+  DEBUG = next;
+  document.body.classList.toggle('debug', DEBUG);
+
+  if (DEBUG){
+    dbgSaved = { level: S.level, exp: S.exp, hp: S.hp, mp: S.mp };
+    S.level = 99;
+    S.exp = 0;
+    S.hp = S.maxHp;
+    S.mp = mpMax();
+  } else if (dbgSaved){
+    S.level = dbgSaved.level;
+    S.exp = dbgSaved.exp;
+    S.hp = Math.min(S.maxHp, dbgSaved.hp);
+    S.mp = Math.min(mpMax(), dbgSaved.mp);
+    dbgSaved = null;
+  }
+
+  updateHUD();
+  if (mode === 'battle' && S.phase === 'command') renderCommands();
+  paintDebugAnswer();
+  return DEBUG;
+}
+
+window.addEventListener('keydown', function(e){
+  if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = (e.key || '').toLowerCase();
+  if (k.length !== 1) return;
+  dbgBuf = (dbgBuf + k).slice(-4);
+  if (dbgBuf === 'sqsq'){
+    dbgBuf = '';
+    setDebug(!DEBUG);
+  }
+});
+
 /* ---------- 起動シーケンス ---------- */
 const SUB_TEXT = '勉強するほど強くなる。強くなるほど世界が広がる。';
 let introPlayed = false;
@@ -2816,7 +3051,9 @@ playTitleIntro();
 
 // 検証用フック
 window.__SQ = { state: S, questions: QUESTIONS, startBattle: startBattle, showScreen: showScreen,
-                fx: fx, spells: SPELLS, bloom: function(){ return { off: bloomOff, w: bloomC ? bloomC.width : 0, h: bloomC ? bloomC.height : 0 }; }, get mode(){ return mode; } };
+                fx: fx, spells: SPELLS, setDebug: setDebug,
+                bloom: function(){ return { off: bloomOff, w: bloomC ? bloomC.width : 0, h: bloomC ? bloomC.height : 0 }; },
+                get debug(){ return DEBUG; }, get mode(){ return mode; } };
 })();
 </script>
 </body>
